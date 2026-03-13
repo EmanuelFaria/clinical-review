@@ -178,14 +178,10 @@
     );
   }
 
-  async function decrypt(password) {
-    if (typeof ENCRYPTED_DATA === "undefined" || typeof SALT === "undefined" || typeof IV === "undefined") {
-      throw new Error("NO_DATA");
-    }
-
-    const salt       = hexToBytes(SALT);
-    const iv         = hexToBytes(IV);
-    const ciphertext = b64ToBytes(ENCRYPTED_DATA);
+  async function tryDecrypt(password, reviewer) {
+    const salt       = hexToBytes(reviewer.salt);
+    const iv         = hexToBytes(reviewer.iv);
+    const ciphertext = b64ToBytes(reviewer.data);
     const key        = await deriveKey(password, salt);
 
     const plainBuf = await crypto.subtle.decrypt(
@@ -197,7 +193,27 @@
     return new TextDecoder().decode(plainBuf);
   }
 
-  function injectContent(html) {
+  async function decryptMulti(password) {
+    if (typeof REVIEWERS === "undefined" || !Array.isArray(REVIEWERS) || REVIEWERS.length === 0) {
+      throw new Error("NO_DATA");
+    }
+
+    for (const reviewer of REVIEWERS) {
+      try {
+        const html = await tryDecrypt(password, reviewer);
+        return { html: html, name: reviewer.name };
+      } catch (e) {
+        // Wrong password for this blob — try next
+      }
+    }
+
+    throw new Error("WRONG_PASSWORD");
+  }
+
+  function injectContent(html, reviewerName) {
+    // Set reviewer identity before injection so the document JS can read it
+    window.__REVIEWER_NAME = reviewerName;
+
     document.documentElement.innerHTML = html;
 
     // Re-execute scripts in the decrypted content
@@ -209,7 +225,6 @@
       } else {
         s.textContent = orig.textContent;
       }
-      // Copy attributes
       Array.from(orig.attributes).forEach(function (attr) {
         if (attr.name !== "src") s.setAttribute(attr.name, attr.value);
       });
@@ -230,8 +245,8 @@
     spin.style.display = "block";
 
     try {
-      const html = await decrypt(password);
-      injectContent(html);
+      const result = await decryptMulti(password);
+      injectContent(result.html, result.name);
     } catch (err) {
       attempts++;
       spin.style.display = "none";
